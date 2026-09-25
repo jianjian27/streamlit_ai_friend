@@ -2,7 +2,7 @@ import os
 import datetime
 import json
 from urllib import request, error
-
+import re
 import streamlit as st
 
 SYSTEM_PROMPT = "you are a ai friend, and your name is %s.your personality is %s. your answer should align with your personality and you can chat with user."
@@ -53,13 +53,30 @@ def new_session():
     return datetime.datetime.now().strftime("%Y-%m-%d %H-%M-%S-%f")
 
 
+
 def get_session_label(messages):
+    user_texts = []
     for item in messages:
         if item.get("role") == "user":
             text = str(item.get("content", "")).strip()
             if text:
-                return text[:18] + ("..." if len(text) > 18 else "")
-    return "Empty chat"
+                text = text.replace("\n", " ")
+                text = re.sub(r"\s+", " ", text)
+                user_texts.append(text)
+
+    if not user_texts:
+        return "New chat"
+
+    title = " ".join(user_texts[:2])
+
+    # 去掉过多特殊符号，做成更像标题的文本
+    title = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9\s\-\：\？\！\.\,]", "", title)
+    title = re.sub(r"\s+", " ", title).strip()
+
+    if len(title) > 22:
+        title = title[:22].rstrip() + "..."
+
+    return title
 
 
 def prune_sessions():
@@ -152,14 +169,19 @@ def load_session(session_id):
         st.session_state.profile_name = st.session_state.name
         st.session_state.profile_personality = st.session_state.personality
         st.session_state.show_welcome = False
-
-        # 让当前打开会话更新时间最新，避免高亮项跑到看不见位置
-        data["updated_at"] = datetime.datetime.now().isoformat(timespec="microseconds")
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        st.session_state.selected_session_id = st.session_state.session_id
 
     except Exception as e:
         st.error(f"加载会话失败: {e}")
+
+
+def switch_to_session(session_id):
+    st.session_state.selected_session_id = session_id
+    current_session_id = st.session_state.get("session_id")
+    if current_session_id and current_session_id != session_id and st.session_state.get("messages"):
+        save_session()
+
+    load_session(session_id)
 
 
 def delete_session(session_id):
@@ -173,6 +195,7 @@ def delete_session(session_id):
             st.session_state.session_id = new_session()
             st.session_state.name = DEFAULT_NAME
             st.session_state.personality = DEFAULT_PERSONALITY
+            st.session_state.selected_session_id = st.session_state.session_id
 
             # 输入框清空
             st.session_state.profile_name = ""
@@ -278,6 +301,9 @@ if "session_id" not in st.session_state:
 if "show_welcome" not in st.session_state:
     st.session_state.show_welcome = True
 
+if "selected_session_id" not in st.session_state:
+    st.session_state.selected_session_id = st.session_state.get("session_id")
+
 if "profile_name" not in st.session_state:
     st.session_state.profile_name = ""
 
@@ -295,6 +321,7 @@ with st.sidebar:
         st.session_state.session_id = new_session()
         st.session_state.name = DEFAULT_NAME
         st.session_state.personality = DEFAULT_PERSONALITY
+        st.session_state.selected_session_id = st.session_state.session_id
 
         # 输入框为空但内部为默认值
         st.session_state.profile_name = ""
@@ -306,32 +333,33 @@ with st.sidebar:
     recent_container = st.container(height=420)
     with recent_container:
         sessions = load_sessions()
-        current_session_id = st.session_state.get("session_id")
+        active_session_id = st.session_state.get("selected_session_id", st.session_state.get("session_id"))
 
         for item in sessions:
             session_id = item["session_id"]
-            label = get_session_label(item.get("messages", []))
-            is_active = (session_id == current_session_id)
+            title = get_session_label(item.get("messages", []))
+            is_active = (session_id == active_session_id)
 
-            display_label = f"● {label}" if is_active else label
+            display_label = f"● {title}" if is_active else title
 
             col1, col2 = st.columns([4, 1])
             with col1:
                 if st.button(
-                    display_label,
-                    key=f"load_{session_id}",
-                    type="primary" if is_active else "secondary",
-                    use_container_width=True
+                        display_label,
+                        key=f"load_{session_id}",
+                        type="primary" if is_active else "secondary",
+                        use_container_width=True
                 ):
-                    if current_session_id != session_id:
-                        save_session()
-                        load_session(session_id)
-                        st.rerun()
+                    switch_to_session(session_id)
+                    st.rerun()
 
             with col2:
                 if st.button("🗑️", key=f"delete_{session_id}", use_container_width=True):
                     delete_session(session_id)
                     st.rerun()
+
+    # 控制面板的分隔线
+    st.divider()
 
     st.subheader("AI Friend character")
 
